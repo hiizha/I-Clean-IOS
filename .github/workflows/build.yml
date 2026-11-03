@@ -1,4 +1,3 @@
-
 name: iClean IPA Builder
 
 on:
@@ -19,35 +18,45 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Find ZIP Source
+      - name: Find Source ZIP
         shell: bash
         run: |
-          ZIP_FILE=$(find . -maxdepth 2 \
-            -type f -iname '*.zip' \
-            -not -path './.git/*' \
-            -print -quit)
+          ZIP_FILE="iClean-Source-FIXED-Compile-Error.zip"
 
-          if [ -z "$ZIP_FILE" ]; then
-            echo "::error::Source ZIP tidak ditemukan!"
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "::error::Source ZIP tidak ditemukan: $ZIP_FILE"
+            find . -maxdepth 2 -type f
             exit 1
           fi
 
-          echo "ZIP ditemukan: $ZIP_FILE"
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
-      - name: Extract ZIP
+      - name: Extract Source ZIP
         run: |
           mkdir -p extracted
           ditto -x -k "$ZIP_FILE" extracted
+
+      - name: Fix Swift Source Formatting
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          for file in Path("extracted").rglob("*.swift"):
+              source = file.read_text()
+              source = source.replace("\\n", "\n")
+              file.write_text(source)
+              print("Checked:", file)
+          PY
 
       - name: Locate iClean Source
         shell: bash
         run: |
           APP_FILE=$(find extracted -type f \
-            -name 'iCleanApp.swift' -print -quit)
+            -name "iCleanApp.swift" -print -quit)
 
           if [ -z "$APP_FILE" ]; then
-            echo "::error::iCleanApp.swift tidak ditemukan!"
+            echo "::error::iCleanApp.swift tidak ditemukan"
             exit 1
           fi
 
@@ -81,8 +90,9 @@ jobs:
                   PRODUCT_NAME: iClean
                   SWIFT_VERSION: "5.0"
                   TARGETED_DEVICE_FAMILY: "1"
-                  GENERATE_INFOPLIST_FILE: YES
                   INFOPLIST_KEY_CFBundleDisplayName: iClean
+                  INFOPLIST_KEY_UIUserInterfaceStyle: Automatic
+                  GENERATE_INFOPLIST_FILE: YES
                   ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
                   IPHONEOS_DEPLOYMENT_TARGET: "16.0"
           EOF
@@ -90,7 +100,7 @@ jobs:
           cd "$PROJECT_ROOT"
           xcodegen generate
 
-      - name: Build iOS App
+      - name: Build iClean
         run: |
           xcodebuild \
             -project "$PROJECT_ROOT/iClean.xcodeproj" \
@@ -102,10 +112,14 @@ jobs:
             build
 
       - name: Create IPA
+        shell: bash
         run: |
           APP="$GITHUB_WORKSPACE/build/Build/Products/Release-iphoneos/iClean.app"
 
-          test -d "$APP"
+          if [ ! -d "$APP" ]; then
+            echo "::error::iClean.app tidak ditemukan"
+            exit 1
+          fi
 
           mkdir -p Payload
           cp -R "$APP" Payload/
