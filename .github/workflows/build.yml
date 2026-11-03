@@ -1,5 +1,5 @@
 
-name: Build iClean IPA
+name: iClean IPA Builder
 
 on:
   workflow_dispatch:
@@ -7,42 +7,93 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   build:
-    runs-on: macos-15
+    name: Build iClean for iOS
+    runs-on: macos-15-intel
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
-
-      - name: Find Project Configuration
+      - name: Find ZIP Source
+        shell: bash
         run: |
-          SPEC_FILE=$(find . -type f -name project.yml \
-            -not -path './.git/*' -print -quit)
+          ZIP_FILE=$(find . -maxdepth 2 \
+            -type f -iname '*.zip' \
+            -not -path './.git/*' \
+            -print -quit)
 
-          if [ -z "$SPEC_FILE" ]; then
-            echo "ERROR: project.yml tidak ditemukan!"
-            find . -maxdepth 4 -type f
+          if [ -z "$ZIP_FILE" ]; then
+            echo "::error::Source ZIP tidak ditemukan!"
             exit 1
           fi
 
-          SPEC_DIR=$(dirname "$SPEC_FILE")
-          echo "SPEC_DIR=$SPEC_DIR" >> $GITHUB_ENV
+          echo "ZIP ditemukan: $ZIP_FILE"
+          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
-          echo "Project ditemukan: $SPEC_FILE"
+      - name: Extract ZIP
+        run: |
+          mkdir -p extracted
+          ditto -x -k "$ZIP_FILE" extracted
+
+      - name: Locate iClean Source
+        shell: bash
+        run: |
+          APP_FILE=$(find extracted -type f \
+            -name 'iCleanApp.swift' -print -quit)
+
+          if [ -z "$APP_FILE" ]; then
+            echo "::error::iCleanApp.swift tidak ditemukan!"
+            exit 1
+          fi
+
+          APP_DIR=$(dirname "$APP_FILE")
+          PROJECT_ROOT=$(dirname "$APP_DIR")
+          APP_FOLDER=$(basename "$APP_DIR")
+
+          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
+          echo "APP_FOLDER=$APP_FOLDER" >> "$GITHUB_ENV"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
 
       - name: Generate Xcode Project
         run: |
-          cd "$SPEC_DIR"
+          cat > "$PROJECT_ROOT/project.yml" <<EOF
+          name: iClean
+          options:
+            bundleIdPrefix: com.tesa
+            deploymentTarget:
+              iOS: "16.0"
+          targets:
+            iClean:
+              type: application
+              platform: iOS
+              sources:
+                - $APP_FOLDER
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.tesa.iclean
+                  PRODUCT_NAME: iClean
+                  SWIFT_VERSION: "5.0"
+                  TARGETED_DEVICE_FAMILY: "1"
+                  GENERATE_INFOPLIST_FILE: YES
+                  INFOPLIST_KEY_CFBundleDisplayName: iClean
+                  ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+                  IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+          EOF
+
+          cd "$PROJECT_ROOT"
           xcodegen generate
 
-      - name: Build iClean
+      - name: Build iOS App
         run: |
           xcodebuild \
-            -project "$SPEC_DIR/iClean.xcodeproj" \
+            -project "$PROJECT_ROOT/iClean.xcodeproj" \
             -scheme iClean \
             -configuration Release \
             -sdk iphoneos \
@@ -50,19 +101,20 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
-      - name: Package IPA
+      - name: Create IPA
         run: |
+          APP="$GITHUB_WORKSPACE/build/Build/Products/Release-iphoneos/iClean.app"
+
+          test -d "$APP"
+
           mkdir -p Payload
-
-          cp -R \
-            "$GITHUB_WORKSPACE/build/Build/Products/Release-iphoneos/iClean.app" \
-            Payload/
-
+          cp -R "$APP" Payload/
           zip -r iClean.ipa Payload
 
-      - name: Upload IPA
+      - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: iClean-unsigned-IPA
           path: iClean.ipa
           if-no-files-found: error
+          retention-days: 7
