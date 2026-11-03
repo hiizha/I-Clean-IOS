@@ -18,24 +18,46 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Find Project Configuration
+        run: |
+          SPEC_FILE=$(find . -type f -name project.yml \
+            -not -path './.git/*' -print -quit)
+
+          if [ -z "$SPEC_FILE" ]; then
+            echo "ERROR: project.yml tidak ditemukan!"
+            find . -maxdepth 4 -type f
+            exit 1
+          fi
+
+          SPEC_DIR=$(dirname "$SPEC_FILE")
+          echo "SPEC_DIR=$SPEC_DIR" >> $GITHUB_ENV
+
+          echo "Project ditemukan: $SPEC_FILE"
+
       - name: Generate Xcode Project
-        run: xcodegen generate
+        run: |
+          cd "$SPEC_DIR"
+          xcodegen generate
 
       - name: Build iClean
         run: |
           xcodebuild \
-            -project iClean.xcodeproj \
+            -project "$SPEC_DIR/iClean.xcodeproj" \
             -scheme iClean \
             -configuration Release \
             -sdk iphoneos \
-            -derivedDataPath build \
+            -derivedDataPath "$GITHUB_WORKSPACE/build" \
             CODE_SIGNING_ALLOWED=NO \
             build
 
       - name: Package IPA
         run: |
           mkdir -p Payload
-          cp -R build/Build/Products/Release-iphoneos/iClean.app Payload/
+
+          cp -R \
+            "$GITHUB_WORKSPACE/build/Build/Products/Release-iphoneos/iClean.app" \
+            Payload/
+
           zip -r iClean.ipa Payload
 
       - name: Upload IPA
